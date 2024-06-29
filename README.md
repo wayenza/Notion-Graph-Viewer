@@ -2,6 +2,8 @@
 
 A tool to visualize your Notion database as an interactive graph.
 
+Created by [WebSim](https://github.com/websim)
+
 ## Table of Contents
 
 - [Setup](#setup)
