@@ -1,0 +1,456 @@
+<html><head><base href="https://websim.ai/notion-graph-viewer" />
+<title>WebSim Notion Graph Viewer</title>
+<style>
+  body, html {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    font-family: Arial, sans-serif;
+    background: #1e1e1e;
+    color: #e0e0e0;
+  }
+  #app {
+    display: flex;
+    height: 100vh;
+  }
+  #sidebar {
+    width: 250px;
+    background: #252526;
+    padding: 20px;
+    overflow-y: auto;
+  }
+  #graph-container {
+    flex-grow: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  #graph {
+    width: 100%;
+    height: 100%;
+  }
+  .node {
+    cursor: pointer;
+  }
+  .node circle {
+    stroke: #7a7a7a;
+    stroke-width: 2px;
+  }
+  .node text {
+    font-size: 12px;
+    fill: #e0e0e0;
+  }
+  .link {
+    stroke: #555;
+    stroke-opacity: 0.6;
+  }
+  h1 {
+    margin-top: 0;
+    color: #61afef;
+  }
+  #search, #file-input {
+    width: 100%;
+    padding: 5px;
+    margin-bottom: 10px;
+    background: #3c3c3c;
+    border: 1px solid #555;
+    color: #e0e0e0;
+  }
+  #node-list {
+    list-style-type: none;
+    padding: 0;
+  }
+  #node-list li {
+    padding: 5px;
+    cursor: pointer;
+  }
+  #node-list li:hover {
+    background: #3c3c3c;
+  }
+  #info-panel {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: rgba(37, 37, 38, 0.8);
+    padding: 15px;
+    border-radius: 5px;
+    display: none;
+  }
+  #import-button, #connect-button {
+    width: 100%;
+    padding: 10px;
+    background: #61afef;
+    color: #1e1e1e;
+    border: none;
+    cursor: pointer;
+    margin-bottom: 10px;
+  }
+  #import-button:hover, #connect-button:hover {
+    background: #4d8abf;
+  }
+  #loading {
+    display: none;
+    text-align: center;
+    margin-top: 20px;
+  }
+  .node.selected circle {
+    stroke: #e5c07b;
+    stroke-width: 3px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <h1>Notion Graph Viewer</h1>
+    <input type="file" id="file-input" accept=".zip" style="display: none;">
+    <button id="import-button">Import Notion Export</button>
+    <button id="connect-button" disabled>Connect Selected Nodes</button>
+    <div id="loading">Loading...</div>
+    <input type="text" id="search" placeholder="Search nodes...">
+    <ul id="node-list"></ul>
+  </div>
+  <div id="graph-container">
+    <svg id="graph"></svg>
+    <div id="info-panel"></div>
+  </div>
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+<script>
+const width = window.innerWidth - 250;
+const height = window.innerHeight;
+
+const svg = d3.select("#graph")
+    .attr("width", width)
+    .attr("height", height);
+
+const g = svg.append("g");
+
+const simulation = d3.forceSimulation()
+    .force("link", d3.forceLink().id(d => d.id).distance(100))
+    .force("charge", d3.forceManyBody().strength(-300))
+    .force("center", d3.forceCenter(width / 2, height / 2));
+
+let graph = {
+  "nodes": [],
+  "links": []
+};
+
+let selectedNodes = [];
+
+function updateGraph() {
+  const link = g.selectAll(".link")
+    .data(graph.links)
+    .join("line")
+    .attr("class", "link")
+    .attr("stroke-width", 1);
+
+  const node = g.selectAll(".node")
+    .data(graph.nodes, d => d.id)
+    .join("g")
+    .attr("class", "node")
+    .call(d3.drag()
+      .on("start", dragstarted)
+      .on("drag", dragged)
+      .on("end", dragended));
+
+  node.selectAll("circle")
+    .data(d => [d])
+    .join("circle")
+    .attr("r", d => getNodeRadius(d))
+    .attr("fill", d => getNodeFill(d))
+    .attr("stroke", d => getNodeColor(d));
+
+  node.selectAll("text")
+    .data(d => [d])
+    .join("text")
+    .attr("dx", d => getNodeRadius(d) + 2)
+    .attr("dy", ".35em")
+    .text(d => d.id);
+
+  simulation.nodes(graph.nodes);
+  simulation.force("link").links(graph.links);
+  simulation.alpha(1).restart();
+
+  function ticked() {
+    link
+        .attr("x1", d => d.source.x)
+        .attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x)
+        .attr("y2", d => d.target.y);
+
+    node
+        .attr("transform", d => `translate(${d.x},${d.y})`);
+  }
+
+  simulation.on("tick", ticked);
+
+  function dragstarted(event, d) {
+    if (!event.active) simulation.alphaTarget(0.3).restart();
+    d.fx = d.x;
+    d.fy = d.y;
+  }
+
+  function dragged(event, d) {
+    d.fx = event.x;
+    d.fy = event.y;
+  }
+
+  function dragended(event, d) {
+    if (!event.active) simulation.alphaTarget(0);
+    d.fx = null;
+    d.fy = null;
+  }
+
+  // Node click event
+  node.on("click", (event, d) => {
+    if (event.shiftKey) {
+      // Toggle node selection
+      const index = selectedNodes.findIndex(n => n.id === d.id);
+      if (index === -1) {
+        selectedNodes.push(d);
+        d3.select(event.currentTarget).classed("selected", true);
+      } else {
+        selectedNodes.splice(index, 1);
+        d3.select(event.currentTarget).classed("selected", false);
+      }
+      
+      // Enable/disable connect button
+      document.getElementById("connect-button").disabled = selectedNodes.length < 2;
+    } else {
+      // Show node info
+      const infoPanel = document.getElementById("info-panel");
+      infoPanel.innerHTML = `
+        <h2>${d.id}</h2>
+        <p>Type: ${d.type}</p>
+        <p>Tags: ${d.tags ? d.tags.join(", ") : "None"}</p>
+        <p>Connections: ${getNodeConnections(d)}</p>
+      `;
+      infoPanel.style.display = "block";
+    }
+  });
+
+  // Update node list in sidebar
+  const nodeList = document.getElementById("node-list");
+  nodeList.innerHTML = "";
+  graph.nodes.forEach(node => {
+    const li = document.createElement("li");
+    li.textContent = node.id;
+    li.onclick = () => {
+      // Center the graph on the selected node
+      const transform = d3.zoomIdentity.translate(width/2 - node.x, height/2 - node.y).scale(1);
+      svg.transition().duration(750).call(zoom.transform, transform);
+    };
+    nodeList.appendChild(li);
+  });
+}
+
+function getNodeRadius(node) {
+  const connections = getNodeConnections(node);
+  return Math.max(5, Math.min(20, 5 + connections * 2));
+}
+
+function getNodeConnections(node) {
+  return graph.links.filter(l => l.source.id === node.id || l.target.id === node.id).length;
+}
+
+function getNodeColor(node) {
+  switch(node.type) {
+    case 'page':
+      return '#61afef';
+    case 'tag':
+      return '#98c379';
+    default:
+      return '#c678dd';
+  }
+}
+
+function getNodeFill(node) {
+  const connections = getNodeConnections(node);
+  return connections > 0 ? getNodeColor(node) : 'none';
+}
+
+// Search functionality
+document.getElementById("search").addEventListener("input", (e) => {
+  const searchTerm = e.target.value.toLowerCase();
+  document.querySelectorAll("#node-list li").forEach(li => {
+    if (li.textContent.toLowerCase().includes(searchTerm)) {
+      li.style.display = "block";
+    } else {
+      li.style.display = "none";
+    }
+  });
+});
+
+// Improved zoom behavior
+const zoom = d3.zoom()
+  .scaleExtent([0.1, 10])
+  .on("zoom", (event) => {
+    g.attr("transform", event.transform);
+  });
+
+svg.call(zoom);
+
+// Import functionality
+document.getElementById('import-button').addEventListener('click', () => {
+  document.getElementById('file-input').click();
+});
+
+document.getElementById('file-input').addEventListener('change', (event) => {
+  const file = event.target.files[0];
+  if (file) {
+    const loading = document.getElementById('loading');
+    loading.style.display = 'block';
+    
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const zip = await JSZip.loadAsync(e.target.result);
+        const notionData = await processNotionExport(zip);
+        processNotionData(notionData);
+      } catch (error) {
+        console.error('Error processing Notion export:', error);
+        alert('Error processing Notion export. Please make sure you selected a valid Notion export zip file.');
+      } finally {
+        loading.style.display = 'none';
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+});
+
+// Connect nodes functionality
+document.getElementById('connect-button').addEventListener('click', () => {
+  if (selectedNodes.length >= 2) {
+    for (let i = 0; i < selectedNodes.length - 1; i++) {
+      for (let j = i + 1; j < selectedNodes.length; j++) {
+        const source = selectedNodes[i];
+        const target = selectedNodes[j];
+        if (!graph.links.some(link => 
+          (link.source.id === source.id && link.target.id === target.id) ||
+          (link.source.id === target.id && link.target.id === source.id)
+        )) {
+          graph.links.push({ source: source.id, target: target.id, value: 1 });
+        }
+      }
+    }
+    updateGraph();
+    
+    // Clear selection
+    selectedNodes = [];
+    g.selectAll(".node").classed("selected", false);
+    document.getElementById("connect-button").disabled = true;
+  }
+});
+
+async function processNotionExport(zip) {
+  const pages = [];
+  const tags = new Set();
+
+  // Process each markdown file in the zip
+  for (const [filename, file] of Object.entries(zip.files)) {
+    if (filename.endsWith('.md')) {
+      const content = await file.async('string');
+      const { title, pageTags, links } = parseMarkdownContent(content);
+      
+      pages.push({
+        title,
+        tags: pageTags,
+        links
+      });
+
+      pageTags.forEach(tag => tags.add(tag));
+    }
+  }
+
+  return { pages, tags: Array.from(tags) };
+}
+
+function parseMarkdownContent(content) {
+  const lines = content.split('\n');
+  const title = lines[0].replace(/^# /, '').trim();
+  const pageTags = [];
+  const links = [];
+
+  // Simple parsing for tags and links
+  lines.forEach(line => {
+    const tagMatches = line.match(/#(\w+)/g);
+    if (tagMatches) {
+      pageTags.push(...tagMatches.map(tag => tag.slice(1)));
+    }
+
+    const linkMatches = line.match(/\[([^\]]+)\]\(([^)]+)\)/g);
+    if (linkMatches) {
+      links.push(...linkMatches.map(link => {
+        const [, text, url] = link.match(/\[([^\]]+)\]\(([^)]+)\)/);
+        return { text, url };
+      }));
+    }
+  });
+
+  return { title, pageTags, links };
+}
+
+function processNotionData(data) {
+  graph.nodes = [];
+  graph.links = [];
+
+  // Process pages
+  data.pages.forEach(page => {
+    if (!graph.nodes.some(node => node.id === page.title)) {
+      graph.nodes.push({
+        id: page.title,
+        type: 'page',
+        tags: page.tags
+      });
+    }
+
+    // Create links between pages and their tags
+    page.tags.forEach(tag => {
+      if (!graph.nodes.some(node => node.id === tag)) {
+        graph.nodes.push({ id: tag, type: 'tag' });
+      }
+      graph.links.push({
+        source: page.title,
+        target: tag,
+        value: 1
+      });
+    });
+
+    // Create links between pages based on internal links
+    page.links.forEach(link => {
+      if (data.pages.some(p => p.title === link.text)) {
+        graph.links.push({
+          source: page.title,
+          target: link.text,
+          value: 1
+        });
+      }
+    });
+  });
+
+  // Remove duplicate links
+  graph.links = Array.from(new Set(graph.links.map(JSON.stringify))).map(JSON.parse);
+
+  updateGraph();
+}
+
+// Initial empty graph update
+updateGraph();
+
+// Window resize handler
+window.addEventListener('resize', () => {
+  const newWidth = window.innerWidth - 250;
+  const newHeight = window.innerHeight;
+  
+  svg.attr("width", newWidth)
+     .attr("height", newHeight);
+  
+  simulation.force("center", d3.forceCenter(newWidth / 2, newHeight / 2));
+  simulation.alpha(1).restart();
+});
+
+</script>
+</body></html>
